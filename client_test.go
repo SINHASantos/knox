@@ -12,6 +12,7 @@ import (
 	"path"
 	"reflect"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"testing"
 )
@@ -711,7 +712,10 @@ func TestNewFileClient(t *testing.T) {
 	}
 
 	_, err := NewFileClient("ThisKeyDoesNotExistSoWeExpectAnError")
-	if (err.Error() != "error getting knox key ThisKeyDoesNotExistSoWeExpectAnError. error: exit status 1") && (err.Error() != "error getting knox key ThisKeyDoesNotExistSoWeExpectAnError. error: exec: \"knox\": executable file not found in $PATH") {
-		t.Fatal("Unexpected error", err.Error())
+	// Check that we get an error message starting with the expected prefix
+	// The exact error can vary based on environment (exit status, executable not found, etc.)
+	expectedPrefix := "error getting knox key ThisKeyDoesNotExistSoWeExpectAnError. error:"
+	if err == nil || !strings.HasPrefix(err.Error(), expectedPrefix) {
+		t.Fatalf("Expected error starting with '%s', got: %v", expectedPrefix, err)
 	}
 }
