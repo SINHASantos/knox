@@ -61,6 +61,11 @@ func parseTimeout(val string) (time.Duration, error) {
 }
 
 func runRegister(cmd *Command, args []string) *ErrorStatus {
+	// Validate -g flag usage early: -g requires -k (cannot be used with -f alone)
+	if *registerAndGet && *registerKey == "" {
+		return &ErrorStatus{fmt.Errorf("the -g flag requires -k to specify a single key to retrieve"), false}
+	}
+
 	_, isUncachedMode := cli.(*knox.UncachedHTTPClient)
 
 	// In uncached mode, only support -g with -k to fetch a key directly from the server
@@ -68,9 +73,7 @@ func runRegister(cmd *Command, args []string) *ErrorStatus {
 		if !*registerAndGet {
 			return &ErrorStatus{fmt.Errorf("cannot register keys in no-cache mode; use -g with -k to fetch a key directly"), false}
 		}
-		if *registerKey == "" {
-			return &ErrorStatus{fmt.Errorf("in no-cache mode, -k must be specified with -g to fetch a specific key"), false}
-		}
+		// -k is already validated above
 		// Skip registration, go directly to fetching the key
 		return fetchAndPrintKey(*registerKey, *registerTimeout)
 	}
@@ -128,11 +131,8 @@ func runRegister(cmd *Command, args []string) *ErrorStatus {
 	if err != nil {
 		return &ErrorStatus{fmt.Errorf("error unlocking register file: %w", err), false}
 	}
-	// If specified, force retrieval of keys
+	// If specified, force retrieval of keys (already validated that -k is set when -g is used)
 	if *registerAndGet {
-		if *registerKey == "" {
-			return &ErrorStatus{fmt.Errorf("the -g flag requires -k to specify a single key to retrieve"), false}
-		}
 		return fetchAndPrintKey(*registerKey, *registerTimeout)
 	}
 	logf("Successfully registered keys %v. Keys are updated by the daemon process every %.0f minutes. Check the log for the most recent run.", ks, daemonRefreshTime.Minutes())
