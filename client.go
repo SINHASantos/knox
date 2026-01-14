@@ -230,27 +230,27 @@ func (c *HTTPClient) CacheGetKeyWithContext(ctx context.Context, keyID string) (
 	if c.KeyFolder == "" {
 		return nil, fmt.Errorf("no folder set for cached key")
 	}
-	
+
 	// Check context before file operations
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	default:
 	}
-	
+
 	keyPath := path.Join(c.KeyFolder, keyID)
 	b, err := os.ReadFile(keyPath)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// Check context after file read but before JSON unmarshal
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	default:
 	}
-	
+
 	k := Key{Path: keyPath}
 	err = json.Unmarshal(b, &k)
 	if err != nil {
@@ -603,7 +603,7 @@ func (c *UncachedHTTPClient) getHTTPDataWithContext(ctx context.Context, method 
 						// If we get a 500, we need to retry the request.
 						return fmt.Errorf(resp.Message)
 					}
-					
+
 					// Check context before sleeping
 					backoffDuration := GetBackoffDuration(i)
 					timer := time.NewTimer(backoffDuration)
