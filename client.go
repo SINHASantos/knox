@@ -190,6 +190,7 @@ type APIClient interface {
 	CacheGetKey(keyID string) (*Key, error)
 	CacheGetKeyWithContext(ctx context.Context, keyID string) (*Key, error)
 	NetworkGetKey(keyID string) (*Key, error)
+	NetworkGetKeyWithContext(ctx context.Context, keyID string) (*Key, error)
 	GetKeyWithStatus(keyID string, status VersionStatus) (*Key, error)
 	CacheGetKeyWithStatus(keyID string, status VersionStatus) (*Key, error)
 	NetworkGetKeyWithStatus(keyID string, status VersionStatus) (*Key, error)
@@ -268,6 +269,11 @@ func (c *HTTPClient) CacheGetKeyWithContext(ctx context.Context, keyID string) (
 // NetworkGetKey gets a knox key by keyID and only uses network without the caches.
 func (c *HTTPClient) NetworkGetKey(keyID string) (*Key, error) {
 	return c.UncachedClient.NetworkGetKey(keyID)
+}
+
+// NetworkGetKeyWithContext gets a knox key by keyID and only uses network without the caches, with context support.
+func (c *HTTPClient) NetworkGetKeyWithContext(ctx context.Context, keyID string) (*Key, error) {
+	return c.UncachedClient.NetworkGetKeyWithContext(ctx, keyID)
 }
 
 // GetKey gets a knox key by keyID.
