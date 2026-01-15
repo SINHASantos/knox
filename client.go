@@ -607,7 +607,7 @@ func (c *UncachedHTTPClient) getHTTPDataWithContext(ctx context.Context, method 
 					// If the failure is non authentication related, retry if we got a 500.
 					if (resp.Code != InternalServerErrorCode) || (i == maxRetryAttempts) {
 						// If we get a 500, we need to retry the request.
-						return fmt.Errorf(resp.Message)
+						return fmt.Errorf("%s", resp.Message)
 					}
 
 					// Check context before sleeping
