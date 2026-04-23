@@ -6,12 +6,14 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/gorilla/mux"
 
 	"github.com/pinterest/knox"
 	"github.com/pinterest/knox/log"
+	"github.com/pinterest/knox/server/auth"
 	"github.com/pinterest/knox/server/keydb"
 )
 
@@ -319,6 +321,85 @@ func AddPrincipalValidator(validator knox.PrincipalValidator) {
 	extraPrincipalValidators = append(extraPrincipalValidators, validator)
 }
 
+// ServiceKeyCreationAuthorizer decides whether a non-user principal (e.g. a
+// SPIFFE service) is allowed to create a given key. Implementations hold their
+// own state (allowlists, rate limiters, project metadata, etc.) on their own
+// struct, so Knox itself does not own mutable package-level state.
+//
+// Authorize returns the owner Access that should be added as an Admin on the
+// newly created key to preserve the invariant that every key has a human
+// admin. If ok is false the key creation is rejected.
+type ServiceKeyCreationAuthorizer interface {
+	Authorize(principal knox.Principal, keyID string) (owner knox.Access, ok bool)
+}
+
+// serviceKeyCreationAuthorizer is the single pluggable hook for non-user key
+// creation. When nil (the default), only users may create keys.
+var serviceKeyCreationAuthorizer ServiceKeyCreationAuthorizer
+
+// SetServiceKeyCreationAuthorizer installs the authorizer invoked when a
+// non-user principal attempts to create a key. Pass nil to disable non-user
+// creation (the default).
+func SetServiceKeyCreationAuthorizer(a ServiceKeyCreationAuthorizer) {
+	serviceKeyCreationAuthorizer = a
+}
+
+// ServiceKeyCreationPolicy is a single entry in the reference
+// PrefixServiceKeyCreationAuthorizer implementation. It matches a service
+// principal by SPIFFE ID prefix and a key by key-ID prefix, and names the
+// human Owner that becomes an Admin on keys created under the policy.
+//
+// Metadata is free-form key/value data that callers may use for their own
+// bookkeeping (e.g. project name, rate-limit bucket). It is not interpreted
+// by Knox.
+type ServiceKeyCreationPolicy struct {
+	SpiffePrefix string
+	KeyPrefix    string
+	Owner        knox.Access
+	Metadata     map[string]string
+}
+
+// PrefixServiceKeyCreationAuthorizer is a reference ServiceKeyCreationAuthorizer
+// that matches services by SPIFFE prefix and keys by key-ID prefix. Consumers
+// who need richer behavior (rate limiting, dynamic config, etc.) should
+// implement ServiceKeyCreationAuthorizer themselves.
+type PrefixServiceKeyCreationAuthorizer struct {
+	policies []ServiceKeyCreationPolicy
+}
+
+// AddPolicy registers a policy. Returns an error if:
+//   - Owner is not specified (keys without a human admin would break Knox's
+//     ownership invariant), or
+//   - SpiffePrefix is not a well-formed SPIFFE prefix as validated by
+//     knox.ServicePrefix.IsValidPrincipal (must be a spiffe:// URL ending in
+//     "/" so prefix matching respects path-component boundaries).
+func (a *PrefixServiceKeyCreationAuthorizer) AddPolicy(p ServiceKeyCreationPolicy) error {
+	if p.Owner.ID == "" {
+		return fmt.Errorf("service key creation policy must specify an Owner with a non-empty ID")
+	}
+	if err := knox.PrincipalType(knox.ServicePrefix).IsValidPrincipal(p.SpiffePrefix, nil); err != nil {
+		return fmt.Errorf("invalid SpiffePrefix %q: %w", p.SpiffePrefix, err)
+	}
+	a.policies = append(a.policies, p)
+	return nil
+}
+
+// Authorize implements ServiceKeyCreationAuthorizer.
+func (a *PrefixServiceKeyCreationAuthorizer) Authorize(principal knox.Principal, keyID string) (knox.Access, bool) {
+	if !auth.IsService(principal) {
+		return knox.Access{}, false
+	}
+	id := principal.GetID()
+	for _, p := range a.policies {
+		if strings.HasPrefix(id, p.SpiffePrefix) && strings.HasPrefix(keyID, p.KeyPrefix) {
+			owner := p.Owner
+			owner.AccessType = knox.Admin
+			return owner, true
+		}
+	}
+	return knox.Access{}, false
+}
+
 // newKeyVersion creates a new KeyVersion with correctly set defaults.
 func newKeyVersion(d []byte, s knox.VersionStatus) knox.KeyVersion {
 	version := knox.KeyVersion{}
@@ -330,14 +411,29 @@ func newKeyVersion(d []byte, s knox.VersionStatus) knox.KeyVersion {
 	return version
 }
 
-// NewKey creates a new Key with correctly set defaults.
-func newKey(id string, acl knox.ACL, d []byte, u knox.Principal) knox.Key {
+// newKey creates a new Key with correctly set defaults.
+//
+// The creator is always added as an Admin. Any extraAdmins (e.g. a human
+// owner for service-created keys) are also added as Admins so that the
+// invariant "every key has a human admin" is preserved in a single place.
+func newKey(id string, acl knox.ACL, d []byte, u knox.Principal, extraAdmins ...knox.Access) knox.Key {
 	key := knox.Key{}
 	key.ID = id
 
-	creatorAccess := knox.Access{ID: u.GetID(), AccessType: knox.Admin, Type: knox.User}
+	creatorType := knox.PrincipalType(knox.User)
+	if auth.IsService(u) {
+		creatorType = knox.Service
+	}
+	creatorAccess := knox.Access{ID: u.GetID(), AccessType: knox.Admin, Type: creatorType}
 	key.ACL = acl.Add(creatorAccess)
 	for _, a := range defaultAccess {
+		key.ACL = key.ACL.Add(a)
+	}
+	for _, a := range extraAdmins {
+		if a.ID == "" {
+			continue
+		}
+		a.AccessType = knox.Admin
 		key.ACL = key.ACL.Add(a)
 	}
 
